@@ -1,0 +1,294 @@
+;;; File: util.scm
+;;
+;;; License:
+;; Copyright © $year $author <$email>
+;;
+;; This file is part of $packageName.
+;;
+;; $packageName is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+;;
+;; $packageName is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with <PACKAGE>. If not, see <http://www.gnu.org/licenses/>.
+;;
+;;; Author:     $author <$email>
+;;; Maintainer: $author <$email>
+;;; Created:    $date
+;;
+;;; Homepage:   $website
+;;
+;;; Commentary:
+;; Utility functions/macros/etc. used by other code
+;;
+;;; Code:
+
+;;; ----------------------------------------------------------------------------
+;;; -------------------------------- Preamble ----------------------------------
+;;; ----------------------------------------------------------------------------
+
+
+(define-module (test util)
+  #:use-module (scheme documentation)
+  #:use-module (ice-9 getopt-long)
+  #:use-module (ice-9 command-line)
+  #:use-module (ice-9 pretty-print)
+  #:use-module (ice-9 match)
+  #:use-module (ice-9 regex)
+  #:use-module (ice-9 iconv)
+  #:use-module (rnrs io ports)
+  #:use-module (srfi srfi-19)
+  #:use-module (unit-test)
+  #:export     (;; Macros
+                λ*
+                thunk
+                grk
+                Grk
+
+                ;; List functions
+                nil?
+                one?
+
+                ;; String functions
+                get-default-eol
+                string-concat
+                string-sed
+                split-lines
+
+                ;; Output functions
+                fmtstr
+                cfmtstr
+                outprintf
+                errprintf
+                printfln
+                cprintfln
+                warnf
+                errf
+
+                ;; Misc functions
+                dexit
+                display-version
+                display-help
+                install-locale
+                process-args))
+
+
+;;; ----------------------------------------------------------------------------
+;;; --------------------------------- Macros -----------------------------------
+;;; ----------------------------------------------------------------------------
+
+
+(define-syntax-rule (EXIT-SUCCESS) 0)
+(define-syntax-rule (EXIT-FAILURE) -1)
+
+(define-syntax-rule (λ* args body ...) (lambda* args body ...))
+(define-syntax-rule (thunk body ...)   (lambda* []   body ...))
+
+(define-syntax-rule (grk name)         #`#,(get-greek-lower name))
+(define-syntax-rule (Grk name)         #`#,(get-greek-upper name))
+
+
+;;; ----------------------------------------------------------------------------
+;;; -------------------------------- Parameters --------------------------------
+;;; ----------------------------------------------------------------------------
+
+
+(define package-name%      (make-parameter "<PACKAGE-NAME>"))
+(define command-name%      (make-parameter "<COMMAND-NAME>"))
+(define copyright%         (make-parameter (fmtstr (_ "Copyright © ~a ~a")
+                                                   (copyright-year%)
+                                                   (copyright-holder%))))
+(define copyright-year%    (make-parameter (date-year (current-date))))
+(define copyright-holder%  (make-parameter "$author <$email>"))
+(define license%           (make-parameter *GPLv3+*))
+(define packager%          (make-parameter #f))
+(define packager-version%  (make-parameter #f))
+
+(define debugging-enabled% (make-parameter #t))
+
+(define cprintfln-comment% (make-parameter ";; "))
+(define cfmtstr-comment%   (make-parameter ";; "))
+
+
+;;; ----------------------------------------------------------------------------
+;;; ----------------------------- Utility functions ----------------------------
+;;; ----------------------------------------------------------------------------
+
+
+;; Gettext alias.
+(define (_ msg)
+  (gettext msg "<PACKAGE-NAME>"))
+
+(define (get-greek-lower name)
+  (_ "Get a lowercase greek letter from a symbol of the name of the letter.")
+  (match name
+    ['alpha    #\x03B1]
+    ['beta     #\x03B2]
+    ['gamma    #\x03B3]
+    ['delta    #\x03B4]
+    ['epsilon  #\x03B5]
+    ['zeta     #\x03B6]
+    ['eta      #\x03B7]
+    ['theta    #\x03B8]
+    ['iota     #\x03B9]
+    ['kappa    #\x03BA]
+    ['lambda   #\x03BB]
+    ['mu       #\x03BC]
+    ['nu       #\x03BD]
+    ['xi       #\x03BE]
+    ['omicron  #\x03BF]
+    ['pi       #\x03C0]
+    ['rho      #\x03C1]
+    ['sigma    #\x03C3]
+    ['tau      #\x03C4]
+    ['upsilon  #\x03C5]
+    ['phi      #\x03C6]
+    ['chi      #\x03C7]
+    ['psi      #\x03C8]
+    ['omega    #\x03C9]))
+
+(define (get-greek-upper name)
+  (_ "Get an uppercase greek letter from a symbol of the name of the letter.")
+  (char-upcase (get-greek-lower name)))
+
+
+;;; ----------------------------------------------------------------------------
+;;; ----------------------------- Public functions -----------------------------
+;;; ----------------------------------------------------------------------------
+
+
+(define* (nil? value)
+  (_ "Is the given @var{value} equivalent to @code{#nil}?")
+  (and (null? value)
+       (eqv?  value #nil)))
+
+(define* (one? list)
+  (_ "Determines whether a @var{list} is a singleton.")
+  (= (length list) 1))
+
+(define* (get-default-eol) (fmtstr "~%"))
+
+(define* (string-concat #:rest lists)
+  (_ "Concatenate a list of strings. If multiple arguments are given,
+concatenate each list of strings and then concatenate the results.")
+  (if (one? lists)
+      (apply string-append (car lists))
+      (map string-concat lists)))
+
+(define* (string-sed input regexp new)
+  (_ "Replace all instances of @var{regexp} in @var{input} with @var{new}.")
+  (regexp-substitute/global #f regexp input 'pre new 'post))
+
+(define* (split-lines input #:key (eol-string (get-default-eol)))
+  (_ "Split an @var{input} string into lines.
+Optionally, provide @var{eol-string} as a keyword argument;
+@var{eol-string} represents the end of line string for the given input.")
+  (let ([fix-eol (lambda* []  (string-sed   input eol-string "\n"))])
+    (cond
+     [(equal? eol-string "\n") (string-split input     #\lf)]
+     [(equal? eol-string "\r") (string-split input     #\cr)]
+     [else                     (string-split (fix-eol) #\lf)])))
+
+(define* (outprintf fmt #:rest args)
+  (_ "Format and print the given arguments to the current output port.")
+  (apply format `(,(current-output-port) ,fmt ,@args)))
+
+(define* (errprintf fmt #:rest args)
+  (_ "Format and print the given arguments to the current error port.")
+  (apply format `(,(current-error-port) ,fmt ,@args)))
+
+(define* (fmtstr fmt #:rest args)
+  (_ "Return the result of substituting each of the format variables in @var{fmt}
+with @var{args}.")
+  (apply format `(#f ,fmt ,@args)))
+
+(define* (printfln fmt #:rest args)
+  (_ "Print a formatted string, appending a newline.")
+  (apply format `(#t ,(string-append fmt "\n") ,@args)))
+
+(define* (cfmtstr fmt #:rest args)
+  (_ "Format the given string, prepending a comment -- which can be customized
+with the @code{cfmtstr-comment%} parameter -- and appending an EOL.")
+  (string-concat
+   (map (lambda* [x] (fmtstr "~a~a~%" (cfmtstr-comment%) x))
+        (split-lines (apply fmtstr `(,fmt ,@args))))))
+
+(define* (cprintfln fmt #:rest args)
+  (_ "Print a formatted string, prepending a comment -- which can be customized
+with the @code{cprintfln-comment%} parameter -- and appending an EOL.")
+  (parameterize ((cfmtstr-comment% (cprintfln-comment%)))
+    (format #t "~a" (apply cfmtstr `(,fmt ,@args)))))
+
+(define* (warnf fmt #:rest args)
+  (_ "Print a formatted warning message.")
+  (errprintf (_% ";; Warning:~%~a~%")
+             (apply cfmtstr `(,fmt ,@args))))
+
+(define* (errf fmt #:rest args)
+  (_ "Print a formatted error message.")
+  (errprintf (_% ";; Error:~%~a~%")
+             (apply cfmtstr `(,fmt ,@args))))
+
+(define* (dexit exit-code)
+  (_ "Exit with the given @var{exit-code}, unless the value of the parameter
+@code{debugging-enabled%} is not @code{#f}.")
+  (unless (debugging-enabled%)
+    (exit exit-code)))
+
+(define* (display-version)
+  (_ "Display the version message and exit successfully.
+Uses the following parameters:
+@code{package-name% command-name% copyright-year% copyright-holder% license%}
+@code{packager% packager-version%}")
+  (version-etc (package-name%)
+               (version)
+               #:command-name     (command-name%)
+               #:copyright-year   (copyright-year%)
+               #:copyright-holder (copyright-holder%)
+               #:copyright        (copyright%)
+               #:license          (license%)
+               #:packager         (packager%)
+               #:packager-version (packager-version%))
+  (dexit (EXIT-SUCCESS)))
+
+(define* (display-help options)
+  (_ "Display usage message and exit successfully.")
+  (let ([args (option-ref options '() #f)])
+    (apply (module-ref (resolve-module '(scripts help)) 'main) args))
+  (dexit (EXIT-SUCCESS)))
+
+(define* (install-locale)
+  (_ "Install the system locale.")
+  (when (defined? 'setlocale)
+    (catch 'system-error
+      (thunk (setlocale LC_ALL ""))
+      (lambda* [#:rest args] (warnf (_% "failed to install locale: ~a")
+                                    (strerror (system-error-errno args)))))))
+
+(define* (process-args option-spec arglist proc #:key (stop? #t))
+  (_ "Process the given @var{arglist} against the given @var{option-spec}
+(in the  style of @code{(ice-9 getopt-long)}). After processing, check if
+the @option{-h}, @option{--help}, @option{-v}, or @option{--version}. If
+so, output the relevant messages (for more info., see @code{display-version}
+and @code{display-help}).
+
+If none of the aforementioned flags were specified, run @var{proc} on the
+retrieved @var{options}, which can be queried with @code{option-ref}.
+
+Keyword argument @var{stop?} specifies whether or not @code{getopt-long} has
+the @code{#:stop-at-first-non-option} key set (it is @code{#t} by default).")
+
+  (let* ([full-option-spec `(,@option-spec
+                             (version (single-char #\v) (value #f))
+                             (help    (single-char #\h) (value #f)))]
+         [options           (getopt-long arglist full-option-spec
+                                         #:stop-at-first-non-option stop?)])
+    (cond [(option-ref options 'help    #f) (display-help options)]
+          [(option-ref options 'version #f) (display-version)]
+          [else                             (proc options)])))
